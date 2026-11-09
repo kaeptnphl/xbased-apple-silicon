@@ -540,6 +540,10 @@ extern "C" bool nc_cpu_fault_is_write(const void* ucontext) {
   return Esr && (Esr->esr >> 6) & 1; // ISS.WnR of a data abort
 }
 
+extern "C" uintptr_t nc_cpu_context_pc(const void* ucontext) {
+  return static_cast<const ucontext_t*>(ucontext)->uc_mcontext.pc;
+}
+
 // As FEX's front ends do before they deliver a guest signal: the guest PC from the
 // host PC, the statically allocated registers and the flags from the host context.
 extern "C" NcFrame* nc_cpu_fault_frame(NcCpu* cpu, void* ucontext) {

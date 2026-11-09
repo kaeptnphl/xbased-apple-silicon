@@ -13,6 +13,8 @@
 #include <string.h>
 #ifdef _WIN32
 #include "nc_win_net.h"
+#elif defined(__APPLE__)
+#include <sys/socket.h>
 #else
 #include <sys/eventfd.h>
 #endif
@@ -42,7 +44,7 @@ static struct {
     pthread_mutex_t lock;               /* both rings */
     pthread_cond_t rx_cond;
     Ring tx, rx;
-    int wake_fd;                        /* eventfd: frames to send */
+    int wake_fd, wake_write_fd;         /* eventfd or a socket pair: frames to send */
     uint8_t mac[6];                     /* the NIC's station address, 0: none yet */
     uint64_t sent, received;
     char pcap_path[128];                /* pcap=: "" none */
@@ -51,6 +53,7 @@ static struct {
 } g_net = {
     .lock = PTHREAD_MUTEX_INITIALIZER,
     .wake_fd = -1,
+    .wake_write_fd = -1,
     .cfg = { .lan_port = 3075, .kai_port = 34523 },
 };
 
@@ -220,12 +223,17 @@ void nc_net_send(const uint8_t *frame, size_t len)
     const bool ok = ring_put(&g_net.tx, frame, len);
     pthread_mutex_unlock(&g_net.lock);
     if (ok) {
+#ifdef __APPLE__
+        const char one = 1;
+        (void)!write(g_net.wake_write_fd, &one, sizeof(one));
+#else
         const uint64_t one = 1;
 #ifdef _WIN32
         (void)one;
         nc_eventfd_write(g_net.wake_fd);
 #else
         (void)!write(g_net.wake_fd, &one, sizeof(one));
+#endif
 #endif
     }
 }
@@ -334,6 +342,10 @@ static void *net_thread(void *arg)
         if (fds[0].revents & POLLIN) {
 #ifdef _WIN32
             nc_eventfd_read(g_net.wake_fd);
+#elif defined(__APPLE__)
+            char buf[64];
+            while (read(g_net.wake_fd, buf, sizeof(buf)) > 0) {
+            }
 #else
             uint64_t v;
             (void)!read(g_net.wake_fd, &v, sizeof(v));
@@ -395,8 +407,24 @@ void nc_net_start(void)
     }
 #ifdef _WIN32
     g_net.wake_fd = nc_eventfd();
+#elif defined(__APPLE__)
+    int wake_fds[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, wake_fds) == 0) {
+        g_net.wake_fd = wake_fds[0];
+        g_net.wake_write_fd = wake_fds[1];
+        for (unsigned i = 0; i < 2; i++) {
+            if (!nc_net_socket_flags_ready(wake_fds[i])) {
+                close(wake_fds[0]);
+                close(wake_fds[1]);
+                g_net.wake_fd = -1;
+                g_net.wake_write_fd = -1;
+                break;
+            }
+        }
+    }
 #else
     g_net.wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    g_net.wake_write_fd = g_net.wake_fd;
 #endif
     if (g_net.wake_fd < 0 || !ring_init(&g_net.tx, TX_SLOTS) || !ring_init(&g_net.rx, RX_SLOTS) || !be->init()) {
         nc_log("hakuX-native-net", "%s: couldn't start: the NIC has no link", be->name);

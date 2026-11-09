@@ -25,7 +25,6 @@
 #include <pthread.h>
 #include <signal.h>
 #include <time.h>
-#include <ucontext.h>
 
 void nc_hle_dirty_init(NcVm *vm);
 
@@ -219,11 +218,7 @@ static void smp_setup(void)
 #else
 static void smp_signal(int sig, siginfo_t *si, void *uc)
 {
-#ifdef __x86_64__
-    const uintptr_t pc = (uintptr_t)((ucontext_t *)uc)->uc_mcontext.gregs[REG_RIP];
-#else
-    const uintptr_t pc = (uintptr_t)((ucontext_t *)uc)->uc_mcontext.pc;
-#endif
+    const uintptr_t pc = nc_cpu_context_pc(uc);
     uint32_t eip;
     uint32_t v;
     if (g_nc_idle_waiting) {

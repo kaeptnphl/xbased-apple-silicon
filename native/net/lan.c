@@ -51,12 +51,21 @@ static struct {
 static bool lan_init(void)
 {
     const NcNetConfig *c = nc_net_config();
+#ifdef __APPLE__
+    g_lan.fd = socket(AF_INET, SOCK_DGRAM, 0);
+#else
     g_lan.fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+#endif
     if (g_lan.fd < 0) {
         nc_log("hakuX-native-net", "lan: socket: %s", strerror(nc_net_errno()));
         return false;
     }
-    nc_net_nonblock(g_lan.fd);
+    if (!nc_net_socket_flags_ready(g_lan.fd)) {
+        nc_log("hakuX-native-net", "lan: couldn't configure socket: %s", strerror(nc_net_errno()));
+        nc_net_close(g_lan.fd);
+        g_lan.fd = -1;
+        return false;
+    }
     const int one = 1;
     setsockopt(g_lan.fd, SOL_SOCKET, SO_REUSEADDR, (const void *)&one, sizeof(one));
     setsockopt(g_lan.fd, SOL_SOCKET, SO_BROADCAST, (const void *)&one, sizeof(one));

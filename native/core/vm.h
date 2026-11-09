@@ -3,9 +3,9 @@
  *
  * The guest's 4 GiB address space is a host reservation; guest VA x lives at
  * base + x, and the JIT reaches it through its guest memory base register.
- * Guest physical RAM is one memfd: mapped whole at 0x80000000 (the Xbox's
- * contiguous window) and page by page wherever the kernel maps it, so every
- * physical page has one set of bytes whatever address reaches it.
+ * Guest physical RAM is one shared backing file: mapped whole at 0x80000000
+ * (the Xbox's contiguous window) and page by page wherever the kernel maps it,
+ * so every physical page has one set of bytes whatever address reaches it.
  */
 #ifndef NATIVE_CORE_VM_H
 #define NATIVE_CORE_VM_H

@@ -4,7 +4,7 @@ project(hle_host_tests C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(NC_DEPS "D:/tools/native-deps" CACHE PATH "native core third-party sources")
+set(NC_DEPS "${REPO_ROOT}/../deps" CACHE PATH "native core third-party sources")
 
 add_compile_definitions(HLE_HOST_TEST=1)
 include_directories(${REPO_ROOT} ${NC_DEPS}/root ${CMAKE_CURRENT_SOURCE_DIR})

@@ -20,7 +20,13 @@ typedef struct HleCond {
 } HleCond;
 
 typedef struct HleSem {
+#ifdef __APPLE__
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    unsigned int count;
+#else
     sem_t s;
+#endif
 } HleSem;
 
 /* Set / reset by hand; waiters wait for "set". */

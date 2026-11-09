@@ -41,32 +41,91 @@ bool hle_cond_timedwait(HleCond *c, HleMutex *m, int ms)
 
 void hle_sem_init(HleSem *s, int init)
 {
+#ifdef __APPLE__
+    pthread_mutex_init(&s->mutex, NULL);
+    monotonic_cond_init(&s->cond);
+    s->count = (unsigned int)init;
+#else
     sem_init(&s->s, 0, (unsigned)init);
+#endif
 }
 
 void hle_sem_destroy(HleSem *s)
 {
+#ifdef __APPLE__
+    pthread_cond_destroy(&s->cond);
+    pthread_mutex_destroy(&s->mutex);
+#else
     sem_destroy(&s->s);
+#endif
 }
 
 void hle_sem_post(HleSem *s)
 {
+#ifdef __APPLE__
+    pthread_mutex_lock(&s->mutex);
+    s->count++;
+    pthread_cond_signal(&s->cond);
+    pthread_mutex_unlock(&s->mutex);
+#else
     sem_post(&s->s);
+#endif
 }
 
 void hle_sem_wait(HleSem *s)
 {
+#ifdef __APPLE__
+    pthread_mutex_lock(&s->mutex);
+    while (s->count == 0) {
+        pthread_cond_wait(&s->cond, &s->mutex);
+    }
+    s->count--;
+    pthread_mutex_unlock(&s->mutex);
+#else
     while (sem_wait(&s->s) != 0 && errno == EINTR) {
     }
+#endif
 }
 
 bool hle_sem_trywait(HleSem *s)
 {
+#ifdef __APPLE__
+    pthread_mutex_lock(&s->mutex);
+    bool acquired = s->count != 0;
+    if (acquired) {
+        s->count--;
+    }
+    pthread_mutex_unlock(&s->mutex);
+    return acquired;
+#else
     return sem_trywait(&s->s) == 0;
+#endif
 }
 
 bool hle_sem_timedwait(HleSem *s, int ms)
 {
+#ifdef __APPLE__
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    ts.tv_sec += ms / 1000;
+    ts.tv_nsec += (long)(ms % 1000) * 1000000;
+    if (ts.tv_nsec >= 1000000000) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000;
+    }
+
+    pthread_mutex_lock(&s->mutex);
+    int result = 0;
+    while (s->count == 0 && result == 0) {
+        result = pthread_cond_timedwait(&s->cond, &s->mutex, &ts);
+    }
+    bool acquired = s->count != 0;
+    if (acquired) {
+        s->count--;
+    }
+    pthread_mutex_unlock(&s->mutex);
+    return acquired;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += ms / 1000;
@@ -79,6 +138,7 @@ bool hle_sem_timedwait(HleSem *s, int ms)
     while ((r = sem_timedwait(&s->s, &ts)) != 0 && errno == EINTR) {
     }
     return r == 0;
+#endif
 }
 
 void hle_event_init(HleEvent *e, bool set)

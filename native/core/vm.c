@@ -8,9 +8,10 @@
 #include <dlfcn.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <sys/mman.h>
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
 #include <sys/syscall.h>
 #endif
 #include <unistd.h>
@@ -19,6 +20,12 @@ static uint8_t *g_na;   /* per physical page: no guest access (nc_vm_noaccess), 
 
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 1u
+#endif
+
+#ifdef MAP_NORESERVE
+#define NC_MAP_NORESERVE MAP_NORESERVE
+#else
+#define NC_MAP_NORESERVE 0
 #endif
 
 #define NC_GUARD (64u * 1024u)
@@ -30,9 +37,25 @@ bool nc_vmos_map(NcVm *vm, uint32_t va, uint32_t pa, uint32_t len);
 bool nc_vmos_unmap(NcVm *vm, uint32_t va, uint32_t len);
 void nc_vmos_protect(NcVm *vm, uint32_t va, uint32_t len, int prot);
 #else
-static int memfd(const char *name)
+static int guest_ram_backing_fd(const char *name)
 {
+#ifdef __APPLE__
+    (void)name;
+    char path[] = "/tmp/hakux-ram-XXXXXX";
+    const int fd = mkstemp(path);
+    if (fd < 0) {
+        return -1;
+    }
+    if (unlink(path) != 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) != 0) {
+        const int saved_errno = errno;
+        close(fd);
+        errno = saved_errno;
+        return -1;
+    }
+    return fd;
+#else
     return (int)syscall(__NR_memfd_create, name, MFD_CLOEXEC);
+#endif
 }
 #endif
 
@@ -81,7 +104,7 @@ bool nc_vm_init(NcVm *vm, uint32_t ram_size)
     /* 4 GiB of guest address space with PROT_NONE guards on both sides. */
     vm->reservation_len = (1ull << 32) + 2 * NC_GUARD;
     void *r = mmap(NULL, vm->reservation_len, PROT_NONE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+                   MAP_PRIVATE | MAP_ANONYMOUS | NC_MAP_NORESERVE, -1, 0);
     if (r == MAP_FAILED) {
         nc_log("hakuX-native", "vm: reserve failed: %s", strerror(errno));
         return false;
@@ -92,13 +115,13 @@ bool nc_vm_init(NcVm *vm, uint32_t ram_size)
 
     /* Guest RAM is an AHB's memory when the platform gives its fd (the
      * GPU imports the same buffer: vertices, uploads and readbacks in place,
-     * as UMA allows), else a memfd. NC_RAM_MEMFD=1: the memfd (A/B). */
+     * as UMA allows), else a shared backing file. NC_RAM_MEMFD=1: that file (A/B). */
     const char *mf = getenv("NC_RAM_MEMFD");
     vm->ram_fd = mf && atoi(mf) ? -1 : hle_uma_ram_fd(ram_size);
     if (vm->ram_fd < 0) {
-        vm->ram_fd = memfd("hakux-ram");
+        vm->ram_fd = guest_ram_backing_fd("hakux-ram");
         if (vm->ram_fd < 0 || ftruncate(vm->ram_fd, ram_size) != 0) {
-            nc_log("hakuX-native", "vm: guest RAM memfd failed: %s", strerror(errno));
+            nc_log("hakuX-native", "vm: guest RAM backing file failed: %s", strerror(errno));
             return false;
         }
     }
@@ -336,7 +359,7 @@ bool nc_vm_unmap(NcVm *vm, uint32_t va, uint32_t len)
     }
 #else
     void *want = vm->base + va;
-    if (mmap(want, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_NORESERVE, -1,
+    if (mmap(want, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | NC_MAP_NORESERVE, -1,
              0) != want) {
         return false;
     }

@@ -33,6 +33,7 @@
 #include "native/core/mmio.h"
 
 #include <pthread.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,9 +43,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #elif defined(NC_DESKTOP)
+#ifdef __linux__
 #include <linux/futex.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#endif
 #endif
 
 #define NV2A_BASE 0xFD000000u
@@ -769,7 +772,7 @@ static bool uncapped(void)
  * later each frame: at 370 fps Conker's vCPU idled waiting for it. */
 static volatile uint32_t g_flip_waits;
 
-#ifndef _WIN32
+#if defined(__linux__)
 /* Linux: WaitOnAddress / WakeByAddressAll as futexes */
 static void WakeByAddressAll(void *p)
 {
@@ -781,6 +784,43 @@ static void WaitOnAddress(volatile void *p, void *expected, size_t n, unsigned m
     (void)n;
     const struct timespec ts = {(time_t)(ms / 1000), (long)(ms % 1000) * 1000000};
     syscall(SYS_futex, p, FUTEX_WAIT_PRIVATE, *(uint32_t *)expected, &ts, NULL, 0);
+}
+#elif defined(__APPLE__)
+/* Darwin has no futex syscall; use a condition variable for the rare vblank wait. */
+static pthread_mutex_t g_flip_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_flip_cond = PTHREAD_COND_INITIALIZER;
+
+static void WakeByAddressAll(void *p)
+{
+    (void)p;
+    pthread_mutex_lock(&g_flip_lock);
+    pthread_cond_broadcast(&g_flip_cond);
+    pthread_mutex_unlock(&g_flip_lock);
+}
+
+static void WaitOnAddress(volatile void *p, void *expected, size_t n, unsigned ms)
+{
+    (void)n;
+    struct timespec until;
+    clock_gettime(CLOCK_MONOTONIC, &until);
+    until.tv_sec += ms / 1000;
+    until.tv_nsec += (long)(ms % 1000) * 1000000;
+    if (until.tv_nsec >= 1000000000L) {
+        until.tv_sec++;
+        until.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&g_flip_lock);
+    while (__atomic_load_n((volatile uint32_t *)p, __ATOMIC_ACQUIRE) == *(uint32_t *)expected) {
+        const int result = pthread_cond_timedwait(&g_flip_cond, &g_flip_lock, &until);
+        if (result != 0) {
+            if (result != ETIMEDOUT) {
+                nc_log("hakuX-native", "nv2a: vblank wait failed: %s", strerror(result));
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_flip_lock);
 }
 #endif
 
