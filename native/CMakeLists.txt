@@ -35,7 +35,23 @@ elseif(WIN32)
   # Windows x64: the guest CPU is the core's own x86-32 -> x86-64 translator
   # (cpu/cpu_x86.cpp, on Zydis) instead of FEX; cmake/win.cmake.
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/win.cmake")
+elseif(APPLE)
+  if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$" OR
+     (CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64"))
+    message(FATAL_ERROR
+      "The macOS port targets Apple Silicon arm64 only; detected processor "
+      "'${CMAKE_SYSTEM_PROCESSOR}' and CMAKE_OSX_ARCHITECTURES='${CMAKE_OSX_ARCHITECTURES}'.")
+  endif()
+  add_compile_options("-include${CMAKE_CURRENT_SOURCE_DIR}/compat/darwin/posix.h")
+  message(FATAL_ERROR
+    "The native macOS/arm64 port is not implemented yet. The x86 guest translator and Darwin VM/fault "
+    "backend are incomplete; refusing to select the Android/FEX build path.")
 else()
+  if(NOT ANDROID)
+    message(FATAL_ERROR
+      "Unsupported native host '${CMAKE_SYSTEM_NAME}' (${CMAKE_SYSTEM_PROCESSOR}); "
+      "only Windows x64, Linux x86-64, and Android arm64 are configured.")
+  endif()
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/fex.cmake")
   set(NC_XXHASH_DIR "${HAKUX_FEX_DIR}/External/xxhash")
 endif()

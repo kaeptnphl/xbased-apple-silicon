@@ -26,8 +26,13 @@ static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static uint64_t g_up_ns[NC_IRQ_LINES];
 static uint64_t g_lat_max_ns[NC_IRQ_LINES];
 static uint64_t g_up_cpu_ns[NC_IRQ_LINES];
+#ifndef __APPLE__
 static clockid_t g_cpu_clock;
 static bool g_have_cpu_clock;
+#else
+static pthread_t g_cpu_thread;
+static bool g_cpu_thread_set;
+#endif
 #define IRQ_SLOW_NS 8000000ull
 
 static uint64_t mono_ns(void)
@@ -69,11 +74,15 @@ uint64_t nc_irq_now_ns(void)
 
 uint64_t nc_irq_cpu_ns(void)
 {
+#ifdef __APPLE__
+    return 0;
+#else
     struct timespec ts;
     if (!__atomic_load_n(&g_have_cpu_clock, __ATOMIC_ACQUIRE) || clock_gettime(g_cpu_clock, &ts) != 0) {
         return 0;
     }
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+#endif
 }
 
 uint64_t nc_irq_rise_cpu_ns(unsigned line)
@@ -85,7 +94,9 @@ uint64_t nc_irq_rise_cpu_ns(unsigned line)
  * time runnable but not running (schedstat's run delay) at each rise, so a
  * late line tells a thread waiting for a host CPU from one blocked or
  * sleeping. */
+#ifndef __APPLE__
 static int g_cpu_tid;
+#endif
 static uint64_t g_up_delay_ns[NC_IRQ_LINES];
 
 static bool sched_on(void)
@@ -100,6 +111,9 @@ static bool sched_on(void)
 
 uint64_t nc_irq_delay_ns(void)
 {
+#ifdef __APPLE__
+    return 0;
+#else
     const int tid = __atomic_load_n(&g_cpu_tid, __ATOMIC_ACQUIRE);
     if (!tid || !sched_on()) {
         return 0;
@@ -118,6 +132,7 @@ uint64_t nc_irq_delay_ns(void)
     }
     buf[n] = 0;
     return sscanf(buf, "%llu %llu", &run, &delay) == 2 ? delay : 0;
+#endif
 }
 
 uint64_t nc_irq_rise_delay_ns(unsigned line)
@@ -149,10 +164,15 @@ static void init_cv(void)
 void nc_irq_attach(NcCpu *cpu)
 {
     pthread_once(&g_once, init_cv);
+#ifdef __APPLE__
+    g_cpu_thread = pthread_self();
+    __atomic_store_n(&g_cpu_thread_set, true, __ATOMIC_RELEASE);
+#else
     if (pthread_getcpuclockid(pthread_self(), &g_cpu_clock) == 0) {  /* the guest CPU's thread */
         __atomic_store_n(&g_have_cpu_clock, true, __ATOMIC_RELEASE);
     }
     __atomic_store_n(&g_cpu_tid, (int)gettid(), __ATOMIC_RELEASE);
+#endif
     __atomic_store_n(&g_cpu, cpu, __ATOMIC_RELEASE);
     if (nc_irq_lines()) {
         nc_cpu_request_interrupt(cpu);
@@ -161,8 +181,13 @@ void nc_irq_attach(NcCpu *cpu)
 
 bool nc_irq_cpu_thread(void)
 {
+#ifdef __APPLE__
+    return __atomic_load_n(&g_cpu_thread_set, __ATOMIC_ACQUIRE) &&
+           pthread_equal(g_cpu_thread, pthread_self());
+#else
     const int tid = __atomic_load_n(&g_cpu_tid, __ATOMIC_ACQUIRE);
     return tid && tid == (int)gettid();
+#endif
 }
 
 volatile int g_nc_idle_waiting;

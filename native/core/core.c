@@ -15,7 +15,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <strings.h>
+#if defined(__linux__) || defined(_WIN32)
 #include <sys/prctl.h>
+#endif
 #include <unistd.h>
 
 #define MAIN_STACK_SIZE (256u * 1024u)
@@ -281,7 +283,9 @@ void nc_core_run(NcCore *c)
     /* The guest thread's short host waits (a Sleep(0) poll that went on, the
      * idle CPU) end when they should: Linux lets a normal thread's timed
      * wait run 50 us late by default. */
+#if defined(__linux__) || defined(_WIN32)
     prctl(PR_SET_TIMERSLACK, 1000UL, 0, 0, 0);
+#endif
     /* a savestate: the thread it was running, or the scheduler first */
     const NcCpuContext *start = g_loaded ? nc_kstate_start_context(&c->kernel) : &g_boot->ctx;
     nc_cpu_run(c->cpu, start ? start : &g_boot->ctx);
@@ -395,11 +399,7 @@ bool nc_core_fault(NcCore *c, int sig, siginfo_t *info, void *ucontext)
     if (sig == SIGILL) {
         return false;
     }
-#if defined(__x86_64__)
     const uintptr_t pc = nc_cpu_context_pc(ucontext);
-#else
-    const uintptr_t pc = ((ucontext_t *)ucontext)->uc_mcontext.pc;
-#endif
     if (sig == SIGFPE) {
         /* A guest DIV/IDIV's divide error (fault_win.c): the Xbox kernel would
          * hand it to the title's handlers, which a title rarely has; said

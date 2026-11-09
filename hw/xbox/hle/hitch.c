@@ -115,7 +115,9 @@ void hle_hitch_thread(int slot)
     memset(h, 0, sizeof(*h));
     h->since = hle_prof_now();
     h->act = HLE_ACT_RUN;
+#ifndef __APPLE__
     g_h.clk_ok[slot] = pthread_getcpuclockid(pthread_self(), &g_h.clk[slot]) == 0;
+#endif
 }
 
 void hle_hitch_gpu_done(void)
@@ -125,11 +127,16 @@ void hle_hitch_gpu_done(void)
 
 static int64_t cpu_ns(int slot)
 {
+#ifdef __APPLE__
+    (void)slot;
+    return 0;
+#else
     struct timespec ts;
     if (!g_h.clk_ok[slot] || clock_gettime(g_h.clk[slot], &ts)) {
         return 0;
     }
     return ts.tv_sec * 1000000000ll + ts.tv_nsec;
+#endif
 }
 
 /* Racy reads of the other threads' counters: diagnostics only. */

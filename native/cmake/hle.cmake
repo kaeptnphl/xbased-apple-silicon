@@ -4,7 +4,8 @@
 #
 # Vulkan dependencies come from NC_DEPS (same revisions as the app build):
 #   volk, glslang, spirv_reflect, vma, root/subprojects/nv2a_vsh_cpu.
-set(NC_DEPS "D:/tools/native-deps" CACHE PATH "native core third-party sources")
+get_filename_component(NC_DEFAULT_DEPS "${CMAKE_CURRENT_LIST_DIR}/../../../deps" ABSOLUTE)
+set(NC_DEPS "${NC_DEFAULT_DEPS}" CACHE PATH "native core third-party sources")
 
 add_library(nc_volk STATIC "${NC_DEPS}/volk/volk.c")
 target_include_directories(nc_volk PUBLIC "${NC_DEPS}/volk")

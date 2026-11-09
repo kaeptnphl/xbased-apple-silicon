@@ -6,6 +6,10 @@
  * computed address. The fault address is the access address, so only the
  * transfer (size, direction, extension, register) needs decoding.
  */
+#if defined(__APPLE__) && !defined(_XOPEN_SOURCE)
+#define _XOPEN_SOURCE 700
+#endif
+
 #include "native/core/mmio.h"
 #include <stdlib.h>
 #include <time.h>
@@ -73,6 +77,83 @@ static void count(uint32_t addr, bool write, uint64_t value)
 /* The transfer a load/store instruction makes: one or two elements (LDP/STP)
  * of `bytes` each (16 for a Q register), and the base register writeback of
  * the pre- and post-indexed forms. */
+#if defined(__APPLE__)
+typedef mcontext_t NcMcontext;
+#define NC_CONTEXT_MCONTEXT(uc) ((uc)->uc_mcontext)
+#else
+typedef mcontext_t *NcMcontext;
+#define NC_CONTEXT_MCONTEXT(uc) (&(uc)->uc_mcontext)
+#endif
+
+static uintptr_t context_pc(NcMcontext mc)
+{
+#if defined(__APPLE__)
+    return mc->__ss.__pc;
+#else
+    return mc->pc;
+#endif
+}
+
+static void context_set_pc(NcMcontext mc, uintptr_t pc)
+{
+#if defined(__APPLE__)
+    mc->__ss.__pc = pc;
+#else
+    mc->pc = pc;
+#endif
+}
+
+static uint64_t context_reg(NcMcontext mc, unsigned reg)
+{
+#if defined(__APPLE__)
+    if (reg < 29) {
+        return mc->__ss.__x[reg];
+    }
+    if (reg == 29) {
+        return mc->__ss.__fp;
+    }
+    if (reg == 30) {
+        return mc->__ss.__lr;
+    }
+    return 0;
+#else
+    return mc->regs[reg];
+#endif
+}
+
+static void context_set_reg(NcMcontext mc, unsigned reg, uint64_t value)
+{
+#if defined(__APPLE__)
+    if (reg < 29) {
+        mc->__ss.__x[reg] = value;
+    } else if (reg == 29) {
+        mc->__ss.__fp = value;
+    } else if (reg == 30) {
+        mc->__ss.__lr = value;
+    }
+#else
+    mc->regs[reg] = value;
+#endif
+}
+
+static uint64_t context_sp(NcMcontext mc)
+{
+#if defined(__APPLE__)
+    return mc->__ss.__sp;
+#else
+    return mc->sp;
+#endif
+}
+
+static void context_set_sp(NcMcontext mc, uint64_t sp)
+{
+#if defined(__APPLE__)
+    mc->__ss.__sp = sp;
+#else
+    mc->sp = sp;
+#endif
+}
+
 typedef struct Access {
     unsigned bytes, count;
     bool store, sign, to64, fp, prefetch;
@@ -185,16 +266,20 @@ static bool decode(uint32_t insn, Access *a)
 }
 
 /* The FP/SIMD register file in the signal frame. */
-static struct fpsimd_context *fpsimd(ucontext_t *uc)
+static __uint128_t *fpsimd(ucontext_t *uc)
 {
+#if defined(__APPLE__)
+    return uc->uc_mcontext->__ns.__v;
+#else
     struct _aarch64_ctx *h = (struct _aarch64_ctx *)uc->uc_mcontext.__reserved;
     while (h->magic) {
         if (h->magic == FPSIMD_MAGIC) {
-            return (struct fpsimd_context *)h;
+            return ((struct fpsimd_context *)h)->vregs;
         }
         h = (struct _aarch64_ctx *)((uint8_t *)h + h->size);
     }
     return NULL;
+#endif
 }
 
 bool nc_mmio_fault(const NcVm *vm, const siginfo_t *info, void *ucontext)
@@ -208,25 +293,25 @@ bool nc_mmio_fault(const NcVm *vm, const siginfo_t *info, void *ucontext)
         return false;
     }
     ucontext_t *uc = ucontext;
-    mcontext_t *mc = &uc->uc_mcontext;
+    NcMcontext mc = NC_CONTEXT_MCONTEXT(uc);
     Access a;
-    if (!decode(*(const uint32_t *)(uintptr_t)mc->pc, &a)) {
+    if (!decode(*(const uint32_t *)context_pc(mc), &a)) {
         return false;
     }
     if (a.prefetch) {
-        mc->pc += 4;
+        context_set_pc(mc, context_pc(mc) + 4);
         return true;
     }
-    struct fpsimd_context *fp = a.fp ? fpsimd(uc) : NULL;
+    __uint128_t *fp = a.fp ? fpsimd(uc) : NULL;
     if (a.fp && !fp) {
         return false;
     }
     /* The first element's guest address: the fault address, except for pairs
      * (either element may be the one that faulted): from the base register. */
-    uint64_t *rn = a.rn == 31 ? (uint64_t *)&mc->sp : (uint64_t *)&mc->regs[a.rn];
+    uint64_t rn = a.rn == 31 ? context_sp(mc) : context_reg(mc, a.rn);
     uint32_t first = (uint32_t)guest;
     if (a.count == 2) {
-        const uint64_t host = *rn + (a.wb == 1 ? 0 : a.imm);
+        const uint64_t host = rn + (a.wb == 1 ? 0 : a.imm);
         const uint64_t g = nc_vm_guest_of(vm, (void *)(uintptr_t)host);
         if (g == UINT64_MAX) {
             return false;
@@ -239,39 +324,44 @@ bool nc_mmio_fault(const NcVm *vm, const siginfo_t *info, void *ucontext)
         const uint32_t off = first + e * a.bytes - dev->base;
         if (a.bytes == 16) {
             if (a.store) {
-                const __uint128_t q = fp->vregs[rt];
+                const __uint128_t q = fp[rt];
                 dev->write(dev->opaque, off, (uint64_t)q, 8);
                 dev->write(dev->opaque, off + 8, (uint64_t)(q >> 64), 8);
                 v = (uint64_t)q;
             } else {
                 const uint64_t lo = dev->read(dev->opaque, off, 8), hi = dev->read(dev->opaque, off + 8, 8);
-                fp->vregs[rt] = (__uint128_t)lo | ((__uint128_t)hi << 64);
+                fp[rt] = (__uint128_t)lo | ((__uint128_t)hi << 64);
                 v = lo;
             }
             continue;
         }
         const uint64_t mask = a.bytes < 8 ? (1ull << (8 * a.bytes)) - 1 : ~0ull;
         if (a.store) {
-            v = (a.fp ? (uint64_t)fp->vregs[rt] : rt == 31 ? 0 : mc->regs[rt]) & mask;
+            v = (a.fp ? (uint64_t)fp[rt] : rt == 31 ? 0 : context_reg(mc, rt)) & mask;
             dev->write(dev->opaque, off, v, a.bytes);
         } else {
             v = dev->read(dev->opaque, off, a.bytes) & mask;
             if (a.fp) {
-                fp->vregs[rt] = (__uint128_t)v;
+                fp[rt] = (__uint128_t)v;
             } else if (rt != 31) {
                 uint64_t r = v;
                 if (a.sign) {
                     const int64_t sv = sext(v, 8 * a.bytes);
                     r = a.to64 ? (uint64_t)sv : (uint32_t)sv;
                 }
-                mc->regs[rt] = r;
+                context_set_reg(mc, rt, r);
             }
         }
     }
     if (a.wb) {
-        *rn += a.imm;
+        rn += a.imm;
+        if (a.rn == 31) {
+            context_set_sp(mc, rn);
+        } else {
+            context_set_reg(mc, a.rn, rn);
+        }
     }
-    mc->pc += 4;
+    context_set_pc(mc, context_pc(mc) + 4);
 
     g_total++;
     count((uint32_t)guest, a.store, v);
@@ -311,9 +401,9 @@ bool nc_mmio_fault(const NcVm *vm, const siginfo_t *info, void *ucontext)
 /* The host address a decoded load or store's first element is at: its base
  * register and offset (the fault address may lie further in, an access
  * that crosses into the page that faulted, or be either of a pair's) */
-static bool access_ea(uint32_t insn, const Access *a, const mcontext_t *mc, uint64_t *ea)
+static bool access_ea(uint32_t insn, const Access *a, NcMcontext mc, uint64_t *ea)
 {
-    const uint64_t base = a->rn == 31 ? mc->sp : mc->regs[a->rn];
+    const uint64_t base = a->rn == 31 ? context_sp(mc) : context_reg(mc, a->rn);
     if (a->count == 2) {
         *ea = base + (a->wb == 1 ? 0 : a->imm);
         return true;
@@ -324,7 +414,7 @@ static bool access_ea(uint32_t insn, const Access *a, const mcontext_t *mc, uint
     }
     if ((insn & 0x3b200c00u) == 0x38200800u) {          /* register offset */
         const unsigned rm = (insn >> 16) & 31;
-        uint64_t off = rm == 31 ? 0 : mc->regs[rm];
+        uint64_t off = rm == 31 ? 0 : context_reg(mc, rm);
         switch ((insn >> 13) & 7) {
         case 2:                                         /* UXTW */
             off = (uint32_t)off;
@@ -347,7 +437,7 @@ static bool access_ea(uint32_t insn, const Access *a, const mcontext_t *mc, uint
 
 /* The access's first element's guest address, the fault address within
  * the access */
-static bool ram_first(const NcVm *vm, const siginfo_t *info, const mcontext_t *mc, uint32_t insn,
+static bool ram_first(const NcVm *vm, const siginfo_t *info, NcMcontext mc, uint32_t insn,
                       const Access *a, uint32_t *first)
 {
     uint64_t ea;
@@ -369,10 +459,10 @@ static bool ram_first(const NcVm *vm, const siginfo_t *info, const mcontext_t *m
 bool nc_ram_access_span(const NcVm *vm, const siginfo_t *info, void *ucontext, uint32_t *lo,
                         uint32_t *hi, bool *store)
 {
-    const mcontext_t *mc = &((ucontext_t *)ucontext)->uc_mcontext;
+    NcMcontext mc = NC_CONTEXT_MCONTEXT((ucontext_t *)ucontext);
     Access a;
     uint32_t first;
-    const uint32_t insn = *(const uint32_t *)(uintptr_t)mc->pc;
+    const uint32_t insn = *(const uint32_t *)context_pc(mc);
     if (!decode(insn, &a) || a.prefetch || !ram_first(vm, info, mc, insn, &a, &first)) {
         return false;
     }
@@ -390,14 +480,14 @@ bool nc_ram_emulate(NcVm *vm, const siginfo_t *info, void *ucontext,
                     void (*stored)(uint32_t pa, uint32_t n))
 {
     ucontext_t *uc = ucontext;
-    mcontext_t *mc = &uc->uc_mcontext;
+    NcMcontext mc = NC_CONTEXT_MCONTEXT(uc);
     Access a;
     uint32_t first;
-    const uint32_t insn = *(const uint32_t *)(uintptr_t)mc->pc;
+    const uint32_t insn = *(const uint32_t *)context_pc(mc);
     if (!decode(insn, &a) || a.prefetch || !ram_first(vm, info, mc, insn, &a, &first)) {
         return false;
     }
-    struct fpsimd_context *fp = a.fp ? fpsimd(uc) : NULL;
+    __uint128_t *fp = a.fp ? fpsimd(uc) : NULL;
     const uint32_t n = a.count * a.bytes, pa = nc_vm_phys(vm, first);
     if ((a.fp && !fp) || pa == UINT32_MAX || (pa & (NC_PAGE - 1)) + n > NC_PAGE ||
         (uint64_t)pa + n > vm->ram_size) {
@@ -410,14 +500,14 @@ bool nc_ram_emulate(NcVm *vm, const siginfo_t *info, void *ucontext,
         if (a.bytes == 16) {
             if (a.store) {
                 stored(at, 16);
-                memcpy(m, &fp->vregs[rt], 16);
+                memcpy(m, &fp[rt], 16);
             } else {
-                memcpy(&fp->vregs[rt], m, 16);
+                memcpy(&fp[rt], m, 16);
             }
             continue;
         }
         if (a.store) {
-            const uint64_t v = a.fp ? (uint64_t)fp->vregs[rt] : rt == 31 ? 0 : mc->regs[rt];
+            const uint64_t v = a.fp ? (uint64_t)fp[rt] : rt == 31 ? 0 : context_reg(mc, rt);
             stored(at, a.bytes);
             memcpy(m, &v, a.bytes);     /* little-endian: the low bytes */
             continue;
@@ -425,21 +515,26 @@ bool nc_ram_emulate(NcVm *vm, const siginfo_t *info, void *ucontext,
         uint64_t v = 0;
         memcpy(&v, m, a.bytes);
         if (a.fp) {
-            fp->vregs[rt] = (__uint128_t)v; /* a scalar load clears the rest */
+            fp[rt] = (__uint128_t)v; /* a scalar load clears the rest */
         } else if (rt != 31) {
             uint64_t r = v;
             if (a.sign) {
                 const int64_t sv = sext(v, 8 * a.bytes);
                 r = a.to64 ? (uint64_t)sv : (uint32_t)sv;
             }
-            mc->regs[rt] = r;
+            context_set_reg(mc, rt, r);
         }
     }
     if (a.wb) {
-        uint64_t *rn = a.rn == 31 ? (uint64_t *)&mc->sp : (uint64_t *)&mc->regs[a.rn];
-        *rn += a.imm;
+        uint64_t rn = a.rn == 31 ? context_sp(mc) : context_reg(mc, a.rn);
+        rn += a.imm;
+        if (a.rn == 31) {
+            context_set_sp(mc, rn);
+        } else {
+            context_set_reg(mc, a.rn, rn);
+        }
     }
-    mc->pc += 4;
+    context_set_pc(mc, context_pc(mc) + 4);
     return true;
 }
 

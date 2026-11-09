@@ -13,10 +13,10 @@ struct AHardwareBuffer;
 struct AHardwareBuffer *hle_uma_ahb(void);
 /* The native core: guest RAM as an AHB (the one hle_uma_ahb gives the
  * Vulkan import), as a file descriptor of its memory, which the VM maps at
- * every address it needs instead of a memfd's. -1 if the buffer, its fd or
- * the checks fail (the caller falls back to a memfd: no zero-copy then). A
- * second call with the same size (a relaunch) gives the same buffer,
- * cleared. */
+ * every address it needs instead of a separate backing file. -1 if the
+ * buffer, its fd or the checks fail (the caller creates a shared backing
+ * file: no zero-copy then). A second call with the same size (a relaunch)
+ * gives the same buffer, cleared. */
 int hle_uma_ram_fd(size_t size);
 
 #endif

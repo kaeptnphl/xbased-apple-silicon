@@ -186,6 +186,8 @@ NcFrame *nc_cpu_fault_frame(NcCpu *cpu, void *ucontext);
 void nc_cpu_fault_resume(NcCpu *cpu, void *ucontext);
 /* The faulting access was a write (a data abort's WnR). */
 bool nc_cpu_fault_is_write(const void *ucontext);
+/* Host PC from the signal context passed to the fault handler. */
+uintptr_t nc_cpu_context_pc(const void *ucontext);
 
 /* A SIGBUS (si_code code) in translated guest code: an atomic access the host
  * can't make at that alignment (a locked x86 instruction at an address its
@@ -203,8 +205,6 @@ bool nc_cpu_callret_fault(NcCpu *cpu, uintptr_t fault_addr, void *ucontext);
  * the access was a write before it hands the CONTEXT to the core; whether a
  * host pc is in the translator's code; the one CPU. */
 void nc_cpu_fault_note_write(int write);
-/* A fault's host pc (ucontext: the exception's CONTEXT). */
-uintptr_t nc_cpu_context_pc(const void *ucontext);
 bool nc_cpu_in_code(NcCpu *cpu, uintptr_t pc);
 NcCpu *nc_cpu_current(void);
 /* The profile (HAKUX_PROF) from now, for secs seconds. */

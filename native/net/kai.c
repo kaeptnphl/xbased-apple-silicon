@@ -102,12 +102,21 @@ static bool kai_init(void)
         nc_log("hakuX-native-net", "kai: no engine address (kai=HOST)");
         return false;
     }
+#ifdef __APPLE__
+    g_kai.fd = socket(AF_INET, SOCK_DGRAM, 0);
+#else
     g_kai.fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+#endif
     if (g_kai.fd < 0) {
         nc_log("hakuX-native-net", "kai: socket: %s", strerror(nc_net_errno()));
         return false;
     }
-    nc_net_nonblock(g_kai.fd);
+    if (!nc_net_socket_flags_ready(g_kai.fd)) {
+        nc_log("hakuX-native-net", "kai: couldn't configure socket: %s", strerror(nc_net_errno()));
+        nc_net_close(g_kai.fd);
+        g_kai.fd = -1;
+        return false;
+    }
     snprintf(g_kai.connect, sizeof(g_kai.connect),
              "connect;hakuX-%08x;hakuX;0000000000000000000000000000000000000000", arc4random());
     return true;                        /* the first connect from the network thread */

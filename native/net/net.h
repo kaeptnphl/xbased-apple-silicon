@@ -26,8 +26,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Sockets: descriptors on Android, Winsock SOCKETs on Windows (their own
- * close, errors and non-blocking switch). */
+/* Sockets: POSIX descriptors on Android/macOS/Linux, Winsock SOCKETs on
+ * Windows (their own close, errors and non-blocking switch). */
 #ifdef _WIN32
 /* compat/win (nc_win_net.h, without Winsock's names here: SOCKET is an
  * unsigned long long) */
@@ -39,13 +39,30 @@ int nc_sock_poll(void *fds, unsigned long n, int timeout);
 #define nc_net_errno() nc_sock_errno()
 #define nc_net_close(fd) nc_sock_close((unsigned long long)(fd))
 #define nc_net_nonblock(fd) nc_sock_nonblock((unsigned long long)(fd))
+#define nc_net_socket_flags_ready(fd) (nc_net_nonblock(fd) == 0)
 #else
 #include <errno.h>
+#include <fcntl.h>
 #include <unistd.h>
 #define nc_net_errno() errno
 #define nc_net_poll(fds, n, timeout) poll(fds, n, timeout)
 #define nc_net_close(fd) close(fd)
+#ifdef __APPLE__
+static inline int nc_net_nonblock(int fd)
+{
+    const int flags = fcntl(fd, F_GETFL);
+    return flags < 0 ? -1 : fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+static inline int nc_net_cloexec(int fd)
+{
+    const int flags = fcntl(fd, F_GETFD);
+    return flags < 0 ? -1 : fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+#define nc_net_socket_flags_ready(fd) (nc_net_nonblock(fd) == 0 && nc_net_cloexec(fd) == 0)
+#else
 #define nc_net_nonblock(fd) ((void)(fd))
+#define nc_net_socket_flags_ready(fd) (1)
+#endif
 #endif
 
 #ifdef __cplusplus

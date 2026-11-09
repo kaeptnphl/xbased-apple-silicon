@@ -13,6 +13,31 @@ folder beside the repository:
 
 The executable is built from the `hakux` target and named `xbased`.
 
+## macOS (Apple Silicon)
+
+A native macOS/arm64 build is not implemented yet. CMake rejects macOS
+explicitly rather than falling through to the Android/FEX build path. Setting
+`CMAKE_OSX_ARCHITECTURES=arm64` is not sufficient: the x86 guest translator
+and Darwin VM/fault-handling backend are still incomplete. Guest-RAM backing,
+POSIX timing/network wakeups, and Apple signal-context MMIO/RAM emulation have
+isolated Darwin support and regression tests, but are not yet integrated into
+a complete VM/fault-handler or graphics build. Rosetta is not a supported
+workaround.
+
+The isolated guest-RAM, POSIX network-wakeup, monotonic-timing, HLE semaphore
+and Darwin signal-context MMIO tests can be run on Apple Silicon with:
+
+```sh
+cmake -S tests/native/vm_darwin -B build/vm-darwin
+cmake --build build/vm-darwin
+ctest --test-dir build/vm-darwin --output-on-failure
+```
+
+These tests do not boot an Xbox or validate the CPU translator, graphics,
+Linux/Windows compatibility, or complete 4 KiB guest-page protection on macOS
+hosts with 16 KiB pages. Cross-thread naming and per-thread CPU-time diagnostics
+also remain unsupported on Darwin.
+
 ## Windows (x64)
 
 1. Install [MSYS2](https://www.msys2.org/) and open the **MSYS2 CLANG64** shell.
