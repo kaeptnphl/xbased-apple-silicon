@@ -1,3 +1,5 @@
+> **Apple Silicon port status:** This fork is an experimental native Apple Silicon port of xbased. No working macOS build is available yet. See [BUILDING.md](BUILDING.md#macos-apple-silicon) for the current limitations and isolated Darwin tests.
+
 <p align="center">
   <img src="docs/media/banner.jpg" alt="xbased" width="820">
 </p>

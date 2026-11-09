@@ -1,0 +1,29 @@
+name: Darwin tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  darwin-tests:
+    name: Darwin arm64
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify native Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Configure isolated Darwin tests
+        run: cmake -S tests/native/vm_darwin -B build/vm-darwin -DCMAKE_BUILD_TYPE=Release
+      - name: Build isolated Darwin tests
+        run: cmake --build build/vm-darwin --parallel 2
+      - name: Run isolated Darwin tests
+        run: ctest --test-dir build/vm-darwin --output-on-failure
