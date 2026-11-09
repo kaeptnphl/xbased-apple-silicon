@@ -29,5 +29,13 @@ int main(void)
     assert(hle_sem_trywait(&sem));
     assert(!hle_sem_trywait(&sem));
     hle_sem_destroy(&sem);
+
+    HleSem sem2;
+    hle_sem_init(&sem2, 2);
+    assert(hle_sem_trywait(&sem2));
+    assert(hle_sem_trywait(&sem2));
+    assert(!hle_sem_trywait(&sem2));
+    hle_sem_destroy(&sem2);
+
     return 0;
 }
